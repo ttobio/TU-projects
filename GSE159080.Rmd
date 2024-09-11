@@ -1,0 +1,262 @@
+---
+title: "GSE159080_analysis"
+output: html_document
+date: "2024-07-09"
+---
+```{r}
+library(dplyr)
+library(tidyr)
+raw_data_path <- "C:/Users/Imad/Desktop/TU/RNA-seq/GSE159080/"
+```
+```{r}
+sample_file <- "C:/Users/Imad/Desktop/TU/RNA-seq/GSE159080/GSM4818888_sample_1.count.txt.gz"
+sample_data <- read.table(sample_file)
+colnames(sample_data) <- gsub(".*GSM[0-9]+_(.*).count.txt.gz", "\\1", basename(sample_file))
+head(sample_data)
+
+```
+```{r}
+raw_data_path <- "./GSE159080/"
+sample_files <- list.files(raw_data_path, pattern = "*.count.txt.gz", full.names = TRUE)
+```
+
+```{r}
+# Step 1: List all text files in the directory
+setwd("RNA-seq/raw_counts/")
+file_list <- list.files(pattern = "*.txt")
+
+# Step 2: Initialize an empty list to store data frames
+data_list <- list()
+
+# Step 3: Loop through each file, read data, and store in data_list
+for (file in file_list) {
+  # Read the entire file
+  file_content <- readLines(file)
+  
+  # Extract file name to use as column name
+  file_name <- tools::file_path_sans_ext(basename(file))
+  
+  # Extract gene names and counts
+  gene_data <- matrix(unlist(strsplit(file_content[-1], "\t")), ncol = 2, byrow = TRUE)
+  
+  # Convert to data frame
+  data <- as.data.frame(gene_data, stringsAsFactors = FALSE)
+  
+  # Assign column names
+  colnames(data) <- c("Gene", file_name)
+  
+  # Append the data to the list
+  data_list[[file_name]] <- data
+}
+
+# Step 4: Merge all data frames into one based on Gene names
+merged_data <- Reduce(function(x, y) merge(x, y, by = "Gene", all = TRUE), data_list)
+
+# Step 5: Replace NA values with 0 (if necessary)
+merged_data[is.na(merged_data)] <- 0
+
+# Step 6: Print or further process merged_data
+print(merged_data)
+
+
+```
+
+```{r}
+#Retrieving the metadata
+library(GEOquery)
+gse <- getGEO(GEO = 'GSE159080', GSEMatrix = T)
+gse
+meta <- pData(phenoData(gse[[1]]))
+head(meta)
+```
+```{r}
+write.csv(merged_data, "countmatrix.csv")
+write.csv(meta, "metadata.csv")
+```
+```{r}
+data <- read.csv("RNA-seq/count_subset1.csv")
+meta <- read.csv("RNA-seq/meta_subset1.csv")
+```
+
+
+```{r}
+rownames(data) <- data[,1]
+rownames(meta) <- meta[,1]
+data <- data[, -1]
+meta <- meta [, -1]
+```
+
+
+```{r}
+rownames(meta)
+```
+```{r}
+colnames(data)
+```
+
+```{r}
+colnames(data) <- gsub("\\.", "-", colnames(data))
+```
+
+
+```{r}
+all(rownames(meta) == colnames(data))
+```
+
+```{r}
+all(colnames(data) %in% rownames(meta))
+```
+```{r}
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countData = round(data),
+                       colData = meta,
+                       design = ~ condition)
+
+dds
+
+```
+
+```{r}
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+dds
+```
+
+# set the factor level
+```{r}
+dds$condition <- relevel(dds$condition, ref = "WT")
+```
+
+
+# Running DESeq
+```{r}
+dds <- DESeq(dds)
+res <- results(dds)
+
+res
+
+```
+
+
+Log fold change shrinkage for visualization and ranking
+
+
+```{r}
+resultsNames(dds)
+```
+
+
+```{r}
+library(apeglm)
+resLFC <- lfcShrink(dds, coef="condition_delcydAB_vs_WT", type="apeglm")
+resLFC
+```
+p-values and adjusted p-values
+
+```{r}
+resOrdered <- res[order(res$pvalue),]
+head(resOrdered)
+```
+
+```{r}
+summary(res)
+```
+How many adjusted p-values were less than 0.05?
+
+```{r}
+sum(res$padj < 0.05, na.rm=TRUE)
+```
+
+```{r}
+res05_1.5 <- results(dds, alpha=0.05, lfcThreshold = 1)
+summary(res05_1.5)
+```
+
+```{r}
+write.csv(as.data.frame(resOrdered), 
+          file="GSE159080_results.csv")
+```
+
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("EnhancedVolcano")
+```
+
+```{r}
+setwd("C:/Users/Imad/Desktop/TU/RNA-seq")
+library(EnhancedVolcano)
+RES <- read.csv("GSE159080_results.csv")
+head(RES)
+```
+
+```{r}
+volcano_plot <- EnhancedVolcano(RES, x = "log2FoldChange", y = "padj",title = "WT VS deleted cydAB", lab= RES$X, pCutoff = 5e-2, FCcutoff = 2,
+    pointSize = 3.0,
+    labSize = 6.0)
+```
+
+
+```{r fig.height=15, fig.width= 15}
+print(volcano_plot)
+```
+```{r}
+RES_filtered <- RES_filtered %>%
+  filter(RES_filtered$log2FoldChange > 1) 
+
+```
+
+```{r}
+write.csv(RES_filtered,"GSE159080_filtered.csv")
+```
+
+```{r}
+png(filename = "volcanoplot_0.05.png", width = 3000, height = 2400, res = 200)  # Set output details
+
+volcano_plot <- EnhancedVolcano(RES, x = "log2FoldChange", y = "padj",title = "WT VS deleted cydAB", lab= RES$X, pCutoff = 1e-2, FCcutoff = 2,
+    pointSize = 3.0,
+    labSize = 6.0)
+plot(volcano_plot)
+dev.off()
+```
+```{r}
+# Load necessary libraries
+library(dplyr)
+
+# Path to annotation file
+annotation_file <- "RNA-seq/Mycobacterium_tuberculosis_H37Rv_txt_v5.txt"
+
+# Read the annotation file with error handling
+annotation_data <- read.delim(annotation_file, header = TRUE, sep = "\t", quote = "", stringsAsFactors = FALSE, fill = TRUE, comment.char = "")
+
+head(annotation_data)
+
+```
+```{r}
+# Display the column names
+colnames(annotation_data)
+```
+```{r}
+library(dplyr)
+library(tidyr)  # For distinct() function
+
+# Assuming annotation_data is your data frame
+mapping <- annotation_data %>%
+  dplyr::select(gene_name = Name, locus_id = Locus) %>%
+  distinct()
+
+# View the mapping
+head(mapping)
+```
+```{r}
+gene_GSEA <- read.csv("RNA-seq/GSEA.csv")
+gene_locus_mapping <- left_join(gene_GSEA, mapping, by = "gene_name")
+```
+
+```{r}
+write.csv(gene_locus_mapping, "gene_locus_mapping.csv")
+```
+
